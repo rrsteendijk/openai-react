@@ -1,18 +1,23 @@
-// src/components/Chat.tsx
 import React, { useEffect, useState } from "react";
 import { TextField, Button, Container, Grid, LinearProgress, CircularProgress } from "@mui/material";
 import Message from "./Message";
 import OpenAI from "openai";
 import { MessageDto } from "../models/MessageDto";
 import SendIcon from "@mui/icons-material/Send";
+import { useModuleName } from '../contexts/ModuleNameContext';
+
 
 const Chat: React.FC = () => {
   const [isWaiting, setIsWaiting] = useState<boolean>(false);
   const [messages, setMessages] = useState<Array<MessageDto>>(new Array<MessageDto>());
   const [input, setInput] = useState<string>("");
-  const [assistant, setAssistant] = useState<any>(null);
-  const [thread, setThread] = useState<any>(null);
-  const [openai, setOpenai] = useState<any>(null);
+  const openai = new OpenAI({
+    apiKey: process.env.REACT_APP_OPENAI_API_KEY,
+    dangerouslyAllowBrowser: true,
+  });
+
+  const assistantId = "asst_5thCkkx4rNkuIbCaRQA9hm4g";
+  const [threadId, setThreadId] = useState<string>("");
 
   useEffect(() => {
     initChatBot();
@@ -21,32 +26,15 @@ const Chat: React.FC = () => {
   useEffect(() => {
     setMessages([
       {
-        content: "Hi, I'm your personal assistant. How can I help you?",
+        content: "Hoi, hoe kan ik je helpen?",
         isUser: false,
       },
     ]);
-  }, [assistant]);
+  }, [threadId]);
 
   const initChatBot = async () => {
-    const openai = new OpenAI({
-      apiKey: process.env.REACT_APP_OPENAI_API_KEY,
-      dangerouslyAllowBrowser: true,
-    });
-
-    // Create an assistant
-    const assistant = await openai.beta.assistants.create({
-      name: "Hockey Expert",
-      instructions: "You are a hockey expert. You specialize in helping others learn about hockey.",
-      tools: [{ type: "code_interpreter" }],
-      model: "gpt-4-1106-preview",
-    });
-
-    // Create a thread
     const thread = await openai.beta.threads.create();
-
-    setOpenai(openai);
-    setAssistant(assistant);
-    setThread(thread);
+    setThreadId(thread.id);
   };
 
   const createNewMessage = (content: string, isUser: boolean) => {
@@ -54,51 +42,60 @@ const Chat: React.FC = () => {
     return newMessage;
   };
 
+  const { setModuleName } = useModuleName(); // Aangenomen dat je context zo is opgezet
+
+  const extractAndStoreModuleName = (assistantResponse) => {
+    const searchTerm = "Jouw module heet";
+    const startIndex = assistantResponse.indexOf(searchTerm);
+    if (startIndex !== -1) {
+      const endIndex = assistantResponse.indexOf(".", startIndex);
+      const moduleName = assistantResponse.substring(startIndex + searchTerm.length, endIndex).trim();
+      console.log(`Module naam opgeslagen: ${moduleName}`); // Log de module naam
+      setModuleName(moduleName); // Update de context in plaats van localStorage
+    }
+  };
+
   const handleSendMessage = async () => {
+    if (!threadId) return;
+
     messages.push(createNewMessage(input, true));
     setMessages([...messages]);
     setInput("");
 
-    // Send a message to the thread
-    await openai.beta.threads.messages.create(thread.id, {
+    await openai.beta.threads.messages.create(threadId, {
       role: "user",
       content: input,
     });
 
-    // Run the assistant
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: assistant.id,
+    const run = await openai.beta.threads.runs.create(threadId, {
+      assistant_id: assistantId,
     });
 
-    // Create a response
-    let response = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    let response = await openai.beta.threads.runs.retrieve(threadId, run.id);
 
-    // Wait for the response to be ready
     while (response.status === "in_progress" || response.status === "queued") {
       console.log("waiting...");
       setIsWaiting(true);
       await new Promise((resolve) => setTimeout(resolve, 5000));
-      response = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+      response = await openai.beta.threads.runs.retrieve(threadId, run.id);
     }
 
     setIsWaiting(false);
 
-    // Get the messages for the thread
-    const messageList = await openai.beta.threads.messages.list(thread.id);
+    const messageList = await openai.beta.threads.messages.list(threadId);
 
-    // Find the last message for the current run
     const lastMessage = messageList.data
-      .filter((message: any) => message.run_id === run.id && message.role === "assistant")
+      .filter((message) => message.run_id === run.id && message.role === "assistant")
       .pop();
 
-    // Print the last message coming from the assistant
     if (lastMessage) {
-      console.log(lastMessage.content[0]["text"].value);
-      setMessages([...messages, createNewMessage(lastMessage.content[0]["text"].value, false)]);
+      const responseText = lastMessage.content[0]["text"].value;
+      console.log(responseText);
+      extractAndStoreModuleName(responseText);
+      setMessages([...messages, createNewMessage(responseText, false)]);
     }
   };
 
-  // detect enter key and send message
   const handleKeyPress = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Enter") {
       handleSendMessage();
@@ -106,7 +103,7 @@ const Chat: React.FC = () => {
   };
 
   return (
-    <Container>
+    <Container className="ChatContainer">
       <Grid container direction="column" spacing={2} paddingBottom={2}>
         {messages.map((message, index) => (
           <Grid item alignSelf={message.isUser ? "flex-end" : "flex-start"} key={index}>
@@ -128,7 +125,7 @@ const Chat: React.FC = () => {
           {isWaiting && <LinearProgress color="inherit" />}
         </Grid>
         <Grid item sm={1} xs={3}>
-          <Button variant="contained" size="large" color="primary" onClick={handleSendMessage} disabled={isWaiting}>
+          <Button variant="contained" size="small" color="primary" onClick={handleSendMessage} disabled={isWaiting}>
             {isWaiting && <CircularProgress color="inherit" />}
             {!isWaiting && <SendIcon fontSize="large" />}
           </Button>
